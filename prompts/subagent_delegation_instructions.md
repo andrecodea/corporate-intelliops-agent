@@ -4,7 +4,7 @@
 
 | Agent | Tool | When to use |
 |---|---|---|
-| **research-agent** | `tavily_search`, `think_tool` | Searches the web; fetches full page content via `fetch_full_content=True` when snippets are insufficient |
+| **research-agent** | `tavily_search` | Searches the web (max 2 searches); returns a compressed summary of findings |
 
 ## Delegation Strategy
 

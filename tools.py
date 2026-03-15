@@ -21,7 +21,7 @@ def tavily_search(
     topic: Literal["general", "news", "finance"] = "general",
     search_depth: Literal["advanced", "basic", "fast", "ultra-fast"] = "fast",
     fetch_full_content: bool = False,
-    max_results: Annotated[int, InjectedToolArg] = 1,
+    max_results: Annotated[int, InjectedToolArg] = 3,
     ) -> str:
     """Search the web for general context, facts, or news on a topic.
 

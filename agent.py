@@ -21,7 +21,7 @@ from tavily import UsageLimitExceededError
 # Data Validation
 from pydantic import BaseModel, Field
 from langchain_core.language_models import BaseChatModel
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 
 load_dotenv()
 log = logging.getLogger(__name__)
@@ -50,10 +50,11 @@ except FileNotFoundError as e:
 # |   INIT CLASSES   |
 # --------------------
 class LLMConfig(BaseModel):
-    model_name: str 
-    base_url: str 
-    fallback_model: str 
-    fallback_url: str 
+    model_name: str
+    base_url: str
+    fallback_model: str
+    fallback_url: str
+    subagent_model_name: str
 
 class AgentConfig(BaseModel):
     max_subagent_iterations: int = Field(default=1, ge=1)
@@ -67,6 +68,7 @@ class SubAgent():
     description: str
     system_prompt: str
     tools: list
+    model: BaseChatModel
 
 # --------------------
 # |   INIT CONFIGS   |
@@ -76,6 +78,7 @@ llm_config = LLMConfig(
     base_url = os.getenv("BASE_URL", "https://api.anthropic.com"),
     fallback_model = os.getenv("FALLBACK_MODEL", "gpt-5.2"),
     fallback_url = os.getenv("FALLBACK_BASE_URL", "https://api.openai.com/v1"),
+    subagent_model_name = os.getenv("SUBAGENT_MODEL_NAME", "claude-sonnet-4-6"),
 )
 
 agent_config = AgentConfig(
@@ -88,24 +91,27 @@ agent_config = AgentConfig(
 # --------------------
 # |     INIT LLM     |
 # --------------------
-def _init_llm(config: LLMConfig) -> BaseChatModel:
+def _init_llm(config: LLMConfig, model_name: str | None = None) -> BaseChatModel:
     """Initializes LLM with LLMConfig Pydantic BaseModel and fallback mechanism.
-    
+
     Uses LLMConfig to initialize an LLM model, the config pulls:
         model_name (str): the Large Language Model's name.
         base_url (str): the provider's base URL for inference.
         fallback_model (str): the fallback Large Language Model's name.
         fallback_url (str): the fallback model provider's base URL for inference.
 
+    Args:
+        model_name: override the model name from config (e.g. for sub-agents).
+
     Returns:
         BaseChatModel: LLM ready for inference.
     """
-    log.info("[AGENT] Initializing LLM Configurations...")
+    resolved_model = model_name or config.model_name
+    log.info(f"[AGENT] Initializing LLM: model={resolved_model}")
 
     anthropic_key: str | None = os.getenv("ANTHROPIC_API_KEY")
     if anthropic_key:
-        log.info(f"[AGENT] LLM initialized: model={config.model_name}")
-        return ChatAnthropic(model=config.model_name, base_url=config.base_url, api_key=anthropic_key)
+        return ChatAnthropic(model=resolved_model, base_url=config.base_url, api_key=anthropic_key)
 
     openai_key: str | None = os.getenv("OPENAI_API_KEY")
     if openai_key:
@@ -117,25 +123,32 @@ def _init_llm(config: LLMConfig) -> BaseChatModel:
 # --------------------
 # |  INIT SUBAGENTS  |
 # --------------------
-def _init_subagents(config: AgentConfig) -> list[dict]:
+def _init_subagents(agent_cfg: AgentConfig, llm_cfg: LLMConfig) -> list[dict]:
     """Initializes Subagents with a Pydantic BaseModel as config.
-    
+
     Uses AgentConfig to initialize a list of subagents, the config pulls:
         current_date (str): today's date and time.
 
     Returns:
-        list[dict]: List of dictionaries containing subagent specifications (name, description, prompt and tools)
+        list[dict]: List of dictionaries containing subagent specifications (name, description, prompt, tools and model)
     """
     log.info("[AGENT] Initializing Subagent Configurations...")
 
     research_subagent = SubAgent(
         name="research-agent",
         description="Delegate research to the researcher sub-agent. Searches the web and fetches full page content when needed. Only give this agent one topic at a time.",
-        system_prompt=RESEARCHER_INSTRUCTIONS.format(date=config.current_date),
-        tools=[tavily_search, think_tool],
+        system_prompt=RESEARCHER_INSTRUCTIONS.format(date=agent_cfg.current_date),
+        tools=[tavily_search],
+        model=_init_llm(llm_cfg, model_name=llm_cfg.subagent_model_name),
     )
 
-    return [asdict(research_subagent)]
+    return [{
+        "name": research_subagent.name,
+        "description": research_subagent.description,
+        "system_prompt": research_subagent.system_prompt,
+        "tools": research_subagent.tools,
+        "model": research_subagent.model,
+    }]
 
 # ---------------------
 # | INIT INSTRUCTIONS |
@@ -183,7 +196,7 @@ def build_agent() -> Runnable:
         tools: list = [tavily_search, think_tool]
         log.info("[AGENT] Tools loaded successfully")
 
-        subagents: list = _init_subagents(agent_config)
+        subagents: list = _init_subagents(agent_config, llm_config)
         log.info("[AGENT] Subagents initialized successfully")
 
         other_agents: list = [s['name'] for s in subagents]
