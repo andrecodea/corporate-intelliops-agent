@@ -19,13 +19,17 @@ flowchart TD
     C -->|Comparison| R2[research-agent A\n2–3 topics]
     C -->|Comparison| R3[research-agent B\n2–3 topics]
 
-    R1 --> S[Synthesize findings]
-    R2 --> S
-    R3 --> S
+    R1 --> T[think_tool\nassess findings]
+    R2 --> T
+    R3 --> T
 
-    S --> W[Step 2: Read\nreport_guidelines.md]
-    W --> F[Step 3: Write\nfinal_report.md]
-    F --> V[Step 4: Verify vs\nresearch_request.md]
+    T -->|Gap remains| RX[research-agent\nfill gap]
+    RX --> S
+    T -->|Sufficient| S[Synthesize findings]
+
+    S --> W[Read\nreport_guidelines.md]
+    W --> F[Write\nfinal_report.md]
+    F --> V[Verify vs\nresearch_request.md]
     V --> OUT([Final Report])
 ```
 
@@ -33,28 +37,25 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    IN([Task from Orchestrator]) --> Search[tavily_search\nsnippet mode]
-    Search --> Think[think_tool\nassess findings]
-    Think -->|Snippet sufficient| More{More gaps?}
-    Think -->|Need full content| Fetch[tavily_search\nfetch_full_content=True\nhttpx + markdownify]
-    Fetch --> Think2[think_tool\nreassess]
-    Think2 --> More
-    More -->|Yes, max 3 searches| Search
-    More -->|No| OUT([Summary + Sources])
+    IN([Task from Orchestrator]) --> Search[tavily_search\n3 results]
+    Search --> Gap{Specific gap\nremains?}
+    Gap -->|Yes, 1 more search| Search2[tavily_search\ntargeted query]
+    Gap -->|No| OUT
+    Search2 --> OUT([Compressed summary\n+ Sources])
 ```
 
 ### LLM Call Budget
 
 ```mermaid
 flowchart LR
-    subgraph Simple ["Simple query (~6 calls, ~40k tokens)"]
+    subgraph Simple ["Simple query (~5 calls, ~35k tokens)"]
         direction LR
-        O1[Orchestrator\nplan] --> RA1[research-agent\n3–4 calls] --> O2[Orchestrator\nwrite report]
+        O1[Orchestrator\nplan] --> RA1[research-agent\n1–2 calls] --> O2[Orchestrator\nthink + write report\n2–3 calls]
     end
 
-    subgraph Complex ["Comparison query (~14 calls, ~107k tokens)"]
+    subgraph Complex ["Comparison query (~10 calls, ~90k tokens)"]
         direction LR
-        O3[Orchestrator\nplan] --> RA2[agent A\n4–5 calls] & RA3[agent B\n4–5 calls] --> O4[Orchestrator\nwrite report\n3–4 calls]
+        O3[Orchestrator\nplan] --> RA2[agent A\n1–2 calls] & RA3[agent B\n1–2 calls] --> O4[Orchestrator\nthink + write report\n3–4 calls]
     end
 ```
 
@@ -93,6 +94,7 @@ Optional:
 LANGSMITH_API_KEY=...         # observability
 LANGGRAPH_DATABASE_URL=...    # persistent checkpoints (PostgreSQL)
 MODEL_NAME=claude-sonnet-4-6
+SUBAGENT_MODEL_NAME=claude-sonnet-4-6
 MAX_CONCURRENT_RESEARCH_UNITS=2
 MAX_SUBAGENTS_ITERATIONS=1
 RECURSION_LIMIT=50
@@ -120,15 +122,15 @@ See [`examples/final_report.md`](examples/final_report.md) for a sample report g
 
 | Query type | LLM calls | Total tokens | Latency |
 |---|---|---|---|
-| Simple / single-topic | ~6 | ~40k | ~60s |
-| Comparison / deep research | ~14 | ~107k | ~94s |
+| Simple / single-topic | ~5 | ~35k | ~50s |
+| Comparison / deep research | ~10 | ~90k | ~75s |
 
 ## Roadmap
 
 ### Phase 1 — Token & Cost Optimization
-- [ ] Compress sub-agent findings before passing to orchestrator (reduce report-writing context)
+- [x] Compress sub-agent findings before passing to orchestrator (research-agent returns bullet-point summary)
 - [ ] Route report-writing calls to a cheaper model (e.g. Haiku) instead of Sonnet
-- [ ] Evaluate removing the verification step (Step 6) to save 1 orchestrator call
+- [ ] Evaluate removing the verification step to save 1 orchestrator call
 
 ### Phase 2 — API Layer (FastAPI)
 - [ ] Expose the agent as a REST API via FastAPI
