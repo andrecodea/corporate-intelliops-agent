@@ -13,13 +13,13 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langchain.agents.middleware import SummarizationMiddleware, ToolRetryMiddleware, FilesystemFileSearchMiddleware
 from deepagents import create_deep_agent
 from langchain_core.runnables import Runnable 
-from tools import tavily_search, extract, crawl, think
+from tools import tavily_search, tavily_extract, tavily_crawl, think_tool
 from tavily import UsageLimitExceededError
 
 # Data Validation
 from pydantic import BaseModel, Field
-from dataclasses import dataclass, asdict
-from typing import List
+from langchain_core.language_models import BaseChatModel
+from dataclasses import dataclass
 
 load_dotenv()
 log = logging.getLogger(__name__)
@@ -44,94 +44,140 @@ except FileNotFoundError as e:
     log.error(f"Failed to load prompt: {e}", exc_info=True)
     raise
 
-class AgentConfig(BaseModel):
+# --------------------
+# |   INIT CLASSES   |
+# --------------------
+class LLMConfig(BaseModel):
     model_name: str 
     base_url: str 
     fallback_model: str 
     fallback_url: str 
+
+class AgentConfig(BaseModel):
     max_subagent_iterations: int = Field(default=3, ge=1)
     max_concurrent_research_units: int = Field(default=5, ge=1, le=10)
     recursion_limit: int = Field(default=50, gt=0, le=100)
-    summarizer_model: str = Field()
+    summarizer_model: str
+    current_date: str 
 
 @dataclass
-class SubAgent:
+class SubAgent():
     name: str
     description: str
     system_prompt: str
-    tools: List
+    tools: list
 
-def build_agent() -> Runnable:
-    """Initializes deepagent with subagents"""
+# --------------------
+# |   INIT CONFIGS   |
+# --------------------
+llm_config = LLMConfig(
+    model_name = os.getenv("MODEL_NAME", "mercury-2"),
+    base_url = os.getenv("BASE_URL", "https://api.inceptionlabs.ai/v1"),
+    fallback_model = os.getenv("FALLBACK_MODEL", "gpt-5.2"),
+    fallback_url = os.getenv("FALLBACK_BASE_URL", "https://api.openai.com/v1"),
+)
+
+agent_config = AgentConfig(
+    max_concurrent_research_units = int(os.getenv("MAX_CONCURRENT_RESEARCH_UNITS", 5)),
+    max_subagent_iterations = int(os.getenv("MAX_SUBAGENTS_ITERATIONS", 3)),
+    summarizer_model = os.getenv("SUMMARIZER_MODEL", "gpt-4.1-mini"),
+    recursion_limit = int(os.getenv("RECURSION_LIMIT", 50)),
+    current_date = datetime.now().strftime("%d-%m-%Y") 
+)
+
+# --------------------
+# |     INIT LLM     |
+# --------------------
+def _init_llm(config: LLMConfig) -> BaseChatModel:
+    """Initializes LLM with LLMConfig Pydantic BaseModel and fallback mechanism.
+    
+    Uses LLMConfig to initialize an LLM model, the config pulls:
+        model_name (str): the Large Language Model's name.
+        base_url (str): the provider's base URL for inference.
+        fallback_model (str): the fallback Large Language Model's name.
+        fallback_url (str): the fallback model provider's base URL for inference.
+
+    Returns:
+        BaseChatModel: LLM ready for inference.
+    """
+    log.info("[AGENT] Initializing LLM Configurations...")
+
     try:
-        log.info("[AGENT] Initializing Deep Research Agent")
-        api_key: str | None = os.getenv("INCEPTION_API_KEY")
-
-        # --------------------
-        # |   INIT CONFIGS   |
-        # --------------------
-        config = AgentConfig(
-            model_name = os.getenv("MODEL_NAME", "mercury-2"),
-            base_url = os.getenv("BASE_URL", "https://api.inceptionlabs.ai/v1"),
-            fallback_model = os.getenv("FALLBACK_MODEL", "gpt-5.2"),
-            fallback_url = os.getenv("FALLBACK_BASE_URL", "https://api.openai.com/v1"),
-            max_concurrent_research_units = int(os.getenv("MAX_CONCURRENT_RESEARCH_UNITS", 5)),
-            max_subagent_iterations = int(os.getenv("MAX_SUBAGENTS_ITERATIONS", 3)),
-            summarizer_model = os.getenv("SUMMARIZER_MODEL", "gpt-4.1-mini"),
-            recursion_limit = int(os.getenv("RECURSION_LIMIT", 50)),
-        )
-
-        # Get current date
-        current_date = datetime.now().strftime("%d-%m-%Y")
-
-        # If there's no need for fallback
         model_name = config.model_name
         base_url = config.base_url
+        api_key: str | None = os.getenv("INCEPTION_API_KEY")
 
-        # Fallback to OpenAI
         if not api_key:
             api_key: str | None = os.getenv("OPENAI_API_KEY")
-            base_url = config.fallback_url
-            model_name = config.fallback_model
-            if not api_key:
-                raise EnvironmentError("No LLM API key found, please provide either an INCEPTION_API_KEY or OPENAI_API_KEY in the .env file")
+            model_name, base_url = config.fallback_model, config.fallback_url
 
-        # Init LLM
-        llm = init_chat_model(
-            model=model_name,
-            base_url=base_url,
-            api_key=api_key
-        )
+        if not api_key:
+            raise EnvironmentError("No LLM API key found, please provide either an INCEPTION_API_KEY or OPENAI_API_KEY in the .env file")
 
-        # --------------------
-        # |  INIT SUBAGENTS  |
-        # --------------------
+        log.info(f"[AGENT] Deep Research Agent initialized with model={model_name} successfully")
+        return init_chat_model(model=model_name, base_url=base_url, api_key=api_key)
+    except Exception as e:
+        log.error(f"Failed to initialize LLM: {e}", exc_info=True)
+        raise
+
+# --------------------
+# |  INIT SUBAGENTS  |
+# --------------------
+def _init_subagents(config: AgentConfig) -> list[dict]:
+    """Initializes Subagents with a Pydantic BaseModel as config.
+    
+    Uses AgentConfig to initialize a list of subagents, the config pulls:
+        current_date (str): today's date and time.
+
+    Returns:
+        list[dict]: List of dictionaries containing subagent specifications (name, description, prompt and tools)
+    """
+    try:
+        log.info("[AGENT] Initializing Subagent Configurations...")
+
         research_subagent = SubAgent(
             name="research-agent",
             description="Delegate research to the researcher sub-agent. Only give this researcher one topic at a time.",
-            system_prompt=RESEARCHER_INSTRUCTIONS.format(date=current_date),
-            tools=[research, think]
+            system_prompt=RESEARCHER_INSTRUCTIONS.format(date=config.current_date),
+            tools=[tavily_search, think_tool]
         )
-
         extraction_subagent = SubAgent(
             name= "extraction-agent",
             description="Delegate extraction to the single web page extraction sub-agent. Only give this extractor one topic at a time.",
-            system_prompt=EXTRACTOR_INSTRUCTIONS.format(date=current_date),
-            tools=[extract, think]
+            system_prompt=EXTRACTOR_INSTRUCTIONS.format(date=config.current_date),
+            tools=[tavily_extract, think_tool]
         )
-
         crawling_subagent = SubAgent(
             name="crawling-agent",
             description="Delegate multi web page crawling to the crawling sub-agent. Only give this crawler one topic at a time.",
-            system_prompt=CRAWLER_INSTRUCTIONS.format(date=current_date),
-            tools=[crawl, think]
+            system_prompt=CRAWLER_INSTRUCTIONS.format(date=config.current_date),
+            tools=[tavily_crawl, think_tool]
         )
 
-        tools: list = [tavily_search, tavily_extract, tavily_crawl, think]
-        subagents: list = [asdict(s) for s in [research_subagent, extraction_subagent, crawling_subagent]]
-        other_agents: list = [s['name'] for s in subagents]
+        return [asdict(s) for s in [research_subagent, extraction_subagent, crawling_subagent]]
+    except Exception as e:
+        log.error(f"Failed to initialize subagents: {e}", exc_info=True)
+        raise
 
-        INSTRUCTIONS = (
+# ---------------------
+# | INIT INSTRUCTIONS |
+# ---------------------
+def _assemble_instructions(config: AgentConfig, other_agents: list) -> str:
+    """Assembles the deepagent's main instructions
+
+    Uses AgentConfig to initialize instructions, the config pulls:
+        max_concurrent_research_units (int): max concurrent subagents that can be executed.
+        max_subagent_iterations (int): max amount of times a subagent can iterate through a single task.
+
+    Args:
+        other_agents (list): list of subagents names.
+
+    Returns:
+        str: concatenated prompt with all variables formatted.
+    """
+    try:
+        log.info(f"[AGENT] Initializing instruction configurations...")
+        return (
             RESEARCH_WORKFLOW_INSTRUCTIONS
             + "\n\n"
             + "=" * 80
@@ -145,6 +191,31 @@ def build_agent() -> Runnable:
                 other_agents=other_agents,
             )
         )
+    except Exception as e:
+        log.error(f"Failed to initialize prompt configurations: {e}", exc_info=True)
+        raise
+
+# ---------------------
+# | INIT AGENT GRAPH  |
+# ---------------------
+def build_agent() -> Runnable:
+    """Initializes deepagent with subagents"""
+    try:
+        log.info("[AGENT] Initializing Deep Research Agent...")
+
+        llm = _init_llm(llm_config)
+        log.info("[AGENT] LLM initialized successfully")
+
+        tools: list = [tavily_search, tavily_extract, tavily_crawl, think_tool]
+        log.info(f"[AGENT] Tools loaded successfully")
+
+        subagents: list = _init_subagents(agent_config)
+        log.info(f"[AGENT] Subagents initialized successfully")
+
+        other_agents: list = [s['name'] for s in subagents]
+
+        INSTRUCTIONS = _assemble_instructions(agent_config, other_agents=other_agents)
+        log.info(f"[AGENT] Instructions loaded successfully")
 
         # --------------------
         # |  INIT DEEPAGENT  |
@@ -164,7 +235,7 @@ def build_agent() -> Runnable:
 
                 # Context management middlewares
                 SummarizationMiddleware( 
-                    model=config.summarizer_model,
+                    model=agent_config.summarizer_model,
                     trigger=("fraction", 0.8),
                     keep=("fraction", 0.8) # removes 20% of context window
                 ),
@@ -174,9 +245,8 @@ def build_agent() -> Runnable:
             ]
         )
 
-        log.info(f"[AGENT] Deep Research Agent created with model={model_name}")
         log.info(f"[AGENT] Main tools: {[t.name for t in tools]}")
-        return agent_graph.with_config({"recursion_limit": config.recursion_limit})
+        return agent_graph.with_config({"recursion_limit": agent_config.recursion_limit})
     except Exception as e:
         log.error(f"build_agent function failed: {e}", exc_info=True)
         raise
