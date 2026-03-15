@@ -24,11 +24,11 @@ langgraph up
 Copy `.env` and populate these keys before running:
 - `ANTHROPIC_API_KEY` — primary LLM (claude-sonnet-4-6 by default); falls back to OpenAI if absent
 - `OPENAI_API_KEY` — fallback LLM (gpt-5.2 by default)
-- `TAVILY_API_KEY` — web search/crawl
+- `TAVILY_API_KEY` — web search
 - `LANGSMITH_API_KEY` — LLM observability (optional)
 - `LANGGRAPH_DATABASE_URL` — PostgreSQL for persistent checkpoints (optional; defaults to in-memory)
 
-Optional tuning vars: `MAX_SUBAGENTS_ITERATIONS` (default 3), `MAX_CONCURRENT_RESEARCH_UNITS` (default 5), `RECURSION_LIMIT` (default 50), `MODEL_NAME`, `BASE_URL`, `FALLBACK_MODEL`, `SUMMARIZER_MODEL`.
+Optional tuning vars: `MAX_SUBAGENTS_ITERATIONS` (default 1), `MAX_CONCURRENT_RESEARCH_UNITS` (default 2), `RECURSION_LIMIT` (default 50), `MODEL_NAME`, `FALLBACK_MODEL`.
 
 ## Architecture
 
@@ -37,33 +37,42 @@ Optional tuning vars: `MAX_SUBAGENTS_ITERATIONS` (default 3), `MAX_CONCURRENT_RE
 **`agent.py`** — builds a `deepagents` multi-agent graph:
 - `LLMConfig` / `AgentConfig` (Pydantic): validate env-driven config
 - `SubAgent` (dataclass): defines name, description, system_prompt, tools for each sub-agent
-- `build_agent()`: initializes the LLM (Inception → OpenAI fallback), constructs 2 sub-agents, assembles middleware, returns a LangGraph `Runnable`
+- `build_agent()`: initializes the LLM (Anthropic → OpenAI fallback), constructs 1 sub-agent, assembles middleware, returns a LangGraph `Runnable`
 - Uses `FilesystemBackend(root_dir=workspace/, virtual_mode=True)` so agents write files with virtual paths (`/research_request.md` → `workspace/research_request.md`)
 
-**Two sub-agents**, each with isolated tools and prompts:
+**One sub-agent:**
 | Sub-agent | Tool(s) | Use case |
 |---|---|---|
-| `research-agent` | `tavily_search`, `tavily_extract` | Web search + inline extraction when snippets are insufficient |
-| `crawling-agent` | `tavily_crawl` | Multi-page documentation crawling |
+| `research-agent` | `tavily_search`, `think_tool` | Web search; fetches full page content via httpx + markdownify when snippets are insufficient |
 
-**Middleware stack** (orchestrator, applied after deepagents defaults):
-1. `ToolRetryMiddleware` — retries up to 3×, 2× backoff, on `TimeoutError`/`ConnectionError`/`UsageLimitExceededError`
-2. `SummarizationMiddleware` — compresses context at 10k tokens, keeps 50%
+**Middleware stack** (orchestrator only):
+- `ToolRetryMiddleware` — retries up to 3×, 2× backoff, on `TimeoutError`/`ConnectionError`/`UsageLimitExceededError`
 
-Sub-agents also receive a `SummarizationMiddleware(trigger=("tokens", 8000), keep=0.5)` injected via the `middleware` key in their spec.
+No `SummarizationMiddleware` — it caused context amnesia in sub-agents, leading to over-searching.
 
-**`tools.py`** — four LangChain tools: `tavily_search`, `tavily_extract`, `tavily_crawl`, `think_tool`. The Tavily client is lazily initialized as a module-level singleton. `max_results` in `tavily_search` is `InjectedToolArg` (hidden from LLM, fixed at 1).
+**`tools.py`** — two LangChain tools: `tavily_search`, `think_tool`.
+- `tavily_search`: Tavily API for snippets; when `fetch_full_content=True`, fetches the page via `httpx` and converts HTML → Markdown with `markdownify`. `max_results` is `InjectedToolArg` (hidden from LLM, fixed at 1).
+- `think_tool`: no-op reflection tool that prompts deliberate reasoning before/after searches.
 
-**`prompts/`** — five Markdown prompt templates loaded at startup:
+**`prompts/`** — four Markdown prompt templates loaded at startup:
 - Orchestrator: `orchestrator_agent_instructions.md` + `task_description_prefix.md` + `subagent_delegation_instructions.md`
-- Sub-agents: `research_agent_instructions.md`, `crawling_agent_instructions.md`
-- Sub-agent prompts accept a `{date}` format argument
+- Sub-agent: `research_agent_instructions.md`
+- Sub-agent prompt accepts a `{date}` format argument
+
+**Orchestrator classifier (Step 0):** before running the full workflow, the orchestrator classifies the request — trivial/conversational queries are answered directly without web research.
 
 **`workspace/`** — runtime output directory. `report_guidelines.md` lives here (loaded lazily by the agent when writing the final report). Agent-generated files (`research_request.md`, `final_report.md`) are excluded from git.
 
 **`tests/run_agent.py`** — manual integration test. Measures TTFT, latency, and per-call token usage. Saves runs to `tests/runs/`. Cleans workspace before each run.
 
+## Token Usage (benchmarks)
+
+| Query type | LLM calls | Total tokens | Latency |
+|---|---|---|---|
+| Simple / single-topic | ~6 | ~40k | ~60s |
+| Comparison / deep research | ~14 | ~107k | ~94s |
+
 ## Known Limitations
 
-- **mercury-2 (Inception Labs)** does not reliably follow hard iteration limits in prompts, causing sub-agents to run more tool calls than instructed. This leads to high cumulative token usage and rate limit errors on lower API tiers.
-- Sub-agent internal iteration count has no hard code-level cap in deepagents (only prompt-based limits). `max_subagent_iterations` and `max_concurrent_research_units` in `AgentConfig` are prompt-only — they are not enforced by the framework.
+- `max_subagent_iterations` and `max_concurrent_research_units` in `AgentConfig` are prompt-only — not enforced at the framework level. Claude Sonnet follows these reliably; weaker models may not.
+- Sub-agent iteration count has no hard code-level cap in deepagents.
