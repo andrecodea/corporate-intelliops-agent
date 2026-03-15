@@ -1,9 +1,10 @@
 """"""
 import logging
-from langchain_core.tools import InjectedToolArg, tool 
+import httpx
+from markdownify import markdownify as md
+from langchain_core.tools import InjectedToolArg, tool
 from tavily import TavilyClient
 from typing_extensions import Annotated, Literal
-from pydantic import Field
 
 _client: TavilyClient | None = None 
 
@@ -18,27 +19,24 @@ log = logging.getLogger(__name__)
 @tool(parse_docstring=True)
 def tavily_search(
     query: str,
-    max_results: Annotated[int, Field(default=3, ge=1, le=5)] = 3,
-    topic: Annotated[
-        Literal["general", "news", "finance"],
-    ] = "general",
-    search_depth: Annotated[
-        Literal["advanced", "basic", "fast", "ultra-fast"],
-    ] = "fast",
+    topic: Literal["general", "news", "finance"] = "general",
+    search_depth: Literal["advanced", "basic", "fast", "ultra-fast"] = "fast",
+    fetch_full_content: bool = False,
+    max_results: Annotated[int, InjectedToolArg] = 1,
     ) -> str:
-    """Search the web for information on a given query.
+    """Search the web for general context, facts, or news on a topic.
 
-    Use this tool to gather general context, facts, or news on a topic.
-    Prefer 'fast' for most queries. Use 'advanced' only for high-precision research (costs 2 credits).
+    Prefer 'fast' for most queries. Use 'advanced' for high-precision research.
+    Set fetch_full_content=True to fetch and convert the full page content when snippets are insufficient.
 
     Args:
         query: Search query to execute
-        max_results: Maximum number of results to return. Default 3, max 5.
-        topic: Category of the search. 'news' for real-time updates and current events. 'finance' for financial data. 'general' for broad searches.
-        search_depth: Controls latency vs. relevance tradeoff. 'fast' returns multiple snippets with low latency (1 credit). 'ultra-fast' minimizes latency above all (1 credit). 'basic' is balanced (1 credit). 'advanced' returns highest relevance (2 credits).
+        topic: 'general' for broad searches, 'news' for current events, 'finance' for financial data.
+        search_depth: 'fast' for low latency, 'ultra-fast' for minimum latency, 'basic' for balanced, 'advanced' for highest relevance.
+        fetch_full_content: Set True to fetch full page content via HTTP and convert to markdown. Use when snippet is insufficient.
 
     Returns:
-        Formatted search results with title, URL, and content snippets
+        Search results with title, URL, and content
     """
 
     try:
@@ -50,7 +48,7 @@ def tavily_search(
             query=query,
             max_results=max_results,
             topic=topic,
-            search_depth=search_depth
+            search_depth=search_depth,
         )
 
         results_texts = []
@@ -58,7 +56,15 @@ def tavily_search(
         for result in search_results.get("results", []):
             url = result["url"]
             title = result["title"]
-            content = result.get("content", "")
+            if fetch_full_content:
+                try:
+                    response = httpx.get(url, follow_redirects=True, timeout=10)
+                    content = md(response.text)
+                except Exception as fetch_err:
+                    log.warning(f"[RESEARCH AGENT] httpx fetch failed for {url}: {fetch_err}, falling back to snippet")
+                    content = result.get("content", "")[:1000]
+            else:
+                content = result.get("content", "")[:1000]
 
             result_text = (
                 f"{title}\n"
@@ -68,119 +74,12 @@ def tavily_search(
             )
 
             results_texts.append(result_text)
-        
-        response = f"""Found {len(results_texts)} result(s) for '{query}'\n\n {sep.join(results_texts)}"""
 
-        return response
+        return f"""Found {len(results_texts)} result(s) for '{query}'\n\n{sep.join(results_texts)}"""
     except Exception as e:
         log.error(f"Failed to conduct a search on {query}: {e}", exc_info=True)
         raise
 
-@tool(parse_docstring=True)
-def tavily_extract(
-    urls: list[str],
-    query: str,
-    extract_depth: Annotated[
-        Literal["basic", "advanced"]
-    ] = "basic",
-    ) -> str:
-    """Extract the full content from one or more web pages given their URLs.
-
-    Use this tool when search snippets are insufficient and you need the complete content
-    of a specific article, paper, blog post, or page. Always provide URLs obtained from
-    a prior tavily_search call — do not guess URLs.
-
-    Args:
-        urls: List of URLs to extract content from
-        query: Optional search intent used to rerank extracted content chunks by relevance
-        extract_depth: Extraction depth. 'basic' costs 1 credit per 5 URLs. 'advanced' retrieves tables and embedded content at higher latency, costs 2 credits per 5 URLs.
-
-    Returns:
-        Full extracted content per URL, formatted as markdown
-    """
-    try:
-        extraction_results = _get_tavily_client().extract(
-            urls=urls,
-            query=query,
-            extract_depth=extract_depth,
-        )
-
-        results_texts = []
-
-        for result in extraction_results["results"]:
-            result_url = result["url"]
-            title = result.get("title", result_url)
-            content = result.get("raw_content", "")
-
-            result_text = (
-                f"{title}\n"
-                f"**URL:** {result_url}\n"
-                f"{content}\n\n"
-                "---\n"
-            )
-
-            results_texts.append(result_text)
-        
-        response = f"""Extracted content from {len(urls)} URLs for '{query}'\n{"".join(results_texts)}"""
-
-        return response
-    except Exception as e:
-        log.error(f"Failed to extract from {urls}: {e}", exc_info=True)
-        raise
-
-@tool(parse_docstring=True)
-def tavily_crawl(
-    url: str,
-    instructions: str,
-    max_depth: int = 3,
-    limit: int  = 20,
-    extract_depth: Annotated[
-        Literal["basic", "advanced"],
-        InjectedToolArg
-    ] = "basic",
-    ) -> str:
-    """Crawl a website starting from a root URL, traversing multiple linked pages.
-
-    Use this tool ONLY for multi-page sources such as official documentation, wikis, or
-    structured knowledge bases. For single pages, use tavily_extract instead.
-    Always provide a root URL obtained from a prior tavily_search call — do not guess URLs.
-
-    Args:
-        url: Root URL to begin the crawl from
-        instructions: Natural language instructions to guide the crawler (e.g. 'Find all pages about checkpointing'). Increases cost to 2 credits per 10 pages.
-        max_depth: How many link levels deep to crawl from the root URL. Default 3, max 5.
-        limit: Total number of pages to process before stopping. Default 20.
-
-    Returns:
-        Crawled content per page, formatted as markdown
-    """
-    search_results = _get_tavily_client().crawl(
-        url=url,
-        instructions=instructions,
-        max_depth=max_depth,
-        limit=limit,
-        extract_depth=extract_depth
-    )
-
-    results_texts = []
-
-    for result in search_results.get("results", []):
-        result_url = result["url"]
-        title = result.get("title", result_url)
-        content = result.get("raw_content", "")
-
-        result_text = (
-            f"{title}\n"
-            f"**URL:** {result_url}\n"
-            f"{content}\n\n"
-            "---\n"
-        )
-
-        results_texts.append(result_text)
-    
-    response = f"""Crawled through {url} and got {len(results_texts)} results\n{"".join(results_texts)}"""
-
-    return response
 
 @tool(parse_docstring=True)
 def think_tool(reflection: str) -> str:

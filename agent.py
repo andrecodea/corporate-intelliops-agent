@@ -8,18 +8,20 @@ from dotenv import load_dotenv
 from pathlib import Path
 
 # LLMOps
-from langchain.chat_models import init_chat_model
+from langchain_anthropic import ChatAnthropic
+from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
-from langchain.agents.middleware import SummarizationMiddleware, ToolRetryMiddleware, FilesystemFileSearchMiddleware
+from langchain.agents.middleware import ToolRetryMiddleware
 from deepagents import create_deep_agent
+from deepagents.backends.filesystem import FilesystemBackend
 from langchain_core.runnables import Runnable 
-from tools import tavily_search, tavily_extract, tavily_crawl, think_tool
+from tools import tavily_search, think_tool
 from tavily import UsageLimitExceededError
 
 # Data Validation
 from pydantic import BaseModel, Field
 from langchain_core.language_models import BaseChatModel
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 
 load_dotenv()
 log = logging.getLogger(__name__)
@@ -34,12 +36,10 @@ def _load_prompt(filename:str) -> str:
 # |   LOAD PROMPTS   |
 # --------------------
 try:
-    RESEARCH_WORKFLOW_INSTRUCTIONS = _load_prompt("research_workflow_instructions.md")
-    SUBAGENT_DELEGATION_INSTRUCTIONS = _load_prompt("subagent_delegation_instructions.md")
-    CRAWLER_INSTRUCTIONS = _load_prompt("crawler_agent_instructions.md")
-    EXTRACTOR_INSTRUCTIONS = _load_prompt("extraction_agent_instructions.md")
-    RESEARCHER_INSTRUCTIONS = _load_prompt("research_agent_instructions.md")
-    TASK_DESCRIPTION_PREFIX = _load_prompt("task_description_prefix.md")
+    RESEARCH_WORKFLOW_INSTRUCTIONS = _load_prompt("prompts/orchestrator_agent_instructions.md")
+    SUBAGENT_DELEGATION_INSTRUCTIONS = _load_prompt("prompts/subagent_delegation_instructions.md")
+    RESEARCHER_INSTRUCTIONS = _load_prompt("prompts/research_agent_instructions.md")
+    TASK_DESCRIPTION_PREFIX = _load_prompt("prompts/task_description_prefix.md")
 except FileNotFoundError as e:
     log.error(f"Failed to load prompt: {e}", exc_info=True)
     raise
@@ -57,8 +57,7 @@ class AgentConfig(BaseModel):
     max_subagent_iterations: int = Field(default=3, ge=1)
     max_concurrent_research_units: int = Field(default=5, ge=1, le=10)
     recursion_limit: int = Field(default=50, gt=0, le=100)
-    summarizer_model: str
-    current_date: str 
+    current_date: str
 
 @dataclass
 class SubAgent():
@@ -71,8 +70,8 @@ class SubAgent():
 # |   INIT CONFIGS   |
 # --------------------
 llm_config = LLMConfig(
-    model_name = os.getenv("MODEL_NAME", "mercury-2"),
-    base_url = os.getenv("BASE_URL", "https://api.inceptionlabs.ai/v1"),
+    model_name = os.getenv("MODEL_NAME", "claude-sonnet-4-6"),
+    base_url = os.getenv("BASE_URL", "https://api.anthropic.com"),
     fallback_model = os.getenv("FALLBACK_MODEL", "gpt-5.2"),
     fallback_url = os.getenv("FALLBACK_BASE_URL", "https://api.openai.com/v1"),
 )
@@ -80,9 +79,8 @@ llm_config = LLMConfig(
 agent_config = AgentConfig(
     max_concurrent_research_units = int(os.getenv("MAX_CONCURRENT_RESEARCH_UNITS", 5)),
     max_subagent_iterations = int(os.getenv("MAX_SUBAGENTS_ITERATIONS", 3)),
-    summarizer_model = os.getenv("SUMMARIZER_MODEL", "gpt-4.1-mini"),
     recursion_limit = int(os.getenv("RECURSION_LIMIT", 50)),
-    current_date = datetime.now().strftime("%d-%m-%Y") 
+    current_date = datetime.now().strftime("%d-%m-%Y")
 )
 
 # --------------------
@@ -103,19 +101,17 @@ def _init_llm(config: LLMConfig) -> BaseChatModel:
     log.info("[AGENT] Initializing LLM Configurations...")
 
     try:
-        model_name = config.model_name
-        base_url = config.base_url
-        api_key: str | None = os.getenv("INCEPTION_API_KEY")
+        anthropic_key: str | None = os.getenv("ANTHROPIC_API_KEY")
+        if anthropic_key:
+            log.info(f"[AGENT] LLM initialized: model={config.model_name}")
+            return ChatAnthropic(model=config.model_name, api_key=anthropic_key)
 
-        if not api_key:
-            api_key: str | None = os.getenv("OPENAI_API_KEY")
-            model_name, base_url = config.fallback_model, config.fallback_url
+        openai_key: str | None = os.getenv("OPENAI_API_KEY")
+        if openai_key:
+            log.info(f"[AGENT] LLM initialized: model={config.fallback_model} (fallback)")
+            return ChatOpenAI(model=config.fallback_model, base_url=config.fallback_url, api_key=openai_key)
 
-        if not api_key:
-            raise EnvironmentError("No LLM API key found, please provide either an INCEPTION_API_KEY or OPENAI_API_KEY in the .env file")
-
-        log.info(f"[AGENT] Deep Research Agent initialized with model={model_name} successfully")
-        return init_chat_model(model=model_name, base_url=base_url, api_key=api_key)
+        raise EnvironmentError("No LLM API key found, provide ANTHROPIC_API_KEY or OPENAI_API_KEY in .env")
     except Exception as e:
         log.error(f"Failed to initialize LLM: {e}", exc_info=True)
         raise
@@ -137,24 +133,12 @@ def _init_subagents(config: AgentConfig) -> list[dict]:
 
         research_subagent = SubAgent(
             name="research-agent",
-            description="Delegate research to the researcher sub-agent. Only give this researcher one topic at a time.",
+            description="Delegate research to the researcher sub-agent. Searches the web and fetches full page content when needed. Only give this agent one topic at a time.",
             system_prompt=RESEARCHER_INSTRUCTIONS.format(date=config.current_date),
-            tools=[tavily_search, think_tool]
-        )
-        extraction_subagent = SubAgent(
-            name= "extraction-agent",
-            description="Delegate extraction to the single web page extraction sub-agent. Only give this extractor one topic at a time.",
-            system_prompt=EXTRACTOR_INSTRUCTIONS.format(date=config.current_date),
-            tools=[tavily_extract, think_tool]
-        )
-        crawling_subagent = SubAgent(
-            name="crawling-agent",
-            description="Delegate multi web page crawling to the crawling sub-agent. Only give this crawler one topic at a time.",
-            system_prompt=CRAWLER_INSTRUCTIONS.format(date=config.current_date),
-            tools=[tavily_crawl, think_tool]
+            tools=[tavily_search, think_tool],
         )
 
-        return [asdict(s) for s in [research_subagent, extraction_subagent, crawling_subagent]]
+        return [asdict(research_subagent)]
     except Exception as e:
         log.error(f"Failed to initialize subagents: {e}", exc_info=True)
         raise
@@ -206,7 +190,7 @@ def build_agent() -> Runnable:
         llm = _init_llm(llm_config)
         log.info("[AGENT] LLM initialized successfully")
 
-        tools: list = [tavily_search, tavily_extract, tavily_crawl, think_tool]
+        tools: list = [tavily_search, think_tool]
         log.info(f"[AGENT] Tools loaded successfully")
 
         subagents: list = _init_subagents(agent_config)
@@ -220,28 +204,23 @@ def build_agent() -> Runnable:
         # --------------------
         # |  INIT DEEPAGENT  |
         # --------------------
+        workspace_dir = BASE_DIR / "workspace"
+        workspace_dir.mkdir(exist_ok=True)
+        backend = FilesystemBackend(root_dir=workspace_dir, virtual_mode=True)
+
         agent_graph = create_deep_agent(
             model=llm,
             tools=tools,
             system_prompt=INSTRUCTIONS,
             subagents=subagents,
             checkpointer=InMemorySaver(),
+            backend=backend,
             middleware=[
                 ToolRetryMiddleware(
                     max_retries=3,
                     backoff_factor=2, # waits 2x the time on each retry
-                    retry_on=[TimeoutError, ConnectionError, UsageLimitExceededError] # For tavily API errors
+                    retry_on=(TimeoutError, ConnectionError, UsageLimitExceededError) # For tavily API errors
                 ),
-
-                # Context management middlewares
-                SummarizationMiddleware( 
-                    model=agent_config.summarizer_model,
-                    trigger=("fraction", 0.8),
-                    keep=("fraction", 0.8) # removes 20% of context window
-                ),
-                FilesystemFileSearchMiddleware(
-                    root_path="./workspace"
-                )
             ]
         )
 
