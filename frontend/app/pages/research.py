@@ -118,56 +118,57 @@ if search_btn and query:
 
     with col_activity:
         st.subheader("Agent Activity")
-        status_placeholder = st.empty()
-        activity_placeholder = st.empty()
-        status_placeholder.markdown("_Planning research..._")
+        with st.spinner(""):
+            status_placeholder = st.empty()
+            activity_placeholder = st.empty()
+            status_placeholder.markdown("_Planning research..._")
 
-        def render_activity():
-            lines = [format_activity_item(t, i, d) for t, i, d in st.session_state.activity_items]
-            activity_placeholder.markdown("\n\n".join(lines) if lines else "")
+            def render_activity():
+                lines = [format_activity_item(t, i, d) for t, i, d in st.session_state.activity_items]
+                activity_placeholder.markdown("\n\n".join(lines) if lines else "")
 
-        try:
-            for event_type, data in stream_events(query):
-                if event_type == "error":
-                    status_placeholder.markdown("_Error_")
-                    st.error(f"Agent error: {data.get('message', 'Unknown error')}")
-                    break
+            try:
+                for event_type, data in stream_events(query):
+                    if event_type == "error":
+                        status_placeholder.markdown("_Error_")
+                        st.error(f"Agent error: {data.get('message', 'Unknown error')}")
+                        break
 
-                elif event_type == "tool_call":
-                    had_tool_calls = True
-                    tool = data.get("tool", "")
-                    inp = data.get("input", {})
-                    st.session_state.activity_items.append((tool, inp, False))
-                    if tool in STATUS_LABELS:
-                        status_placeholder.markdown(f"_{STATUS_LABELS[tool]}_")
-                    render_activity()
+                    elif event_type == "tool_call":
+                        had_tool_calls = True
+                        tool = data.get("tool", "")
+                        inp = data.get("input", {})
+                        st.session_state.activity_items.append((tool, inp, False))
+                        if tool in STATUS_LABELS:
+                            status_placeholder.markdown(f"_{STATUS_LABELS[tool]}_")
+                        render_activity()
 
-                elif event_type == "tool_result":
-                    if st.session_state.activity_items:
-                        tool, inp, _ = st.session_state.activity_items[-1]
-                        st.session_state.activity_items[-1] = (tool, inp, True)
-                    render_activity()
+                    elif event_type == "tool_result":
+                        if st.session_state.activity_items:
+                            tool, inp, _ = st.session_state.activity_items[-1]
+                            st.session_state.activity_items[-1] = (tool, inp, True)
+                        render_activity()
 
-                elif event_type == "token":
-                    token = data.get("content", "")
-                    if token:
-                        if not had_tool_calls:
-                            status_placeholder.markdown("_Answering from existing knowledge..._")
-                        st.session_state.report_content += token
-                        token_buffer += token
-                        if len(token_buffer) >= RENDER_EVERY:
+                    elif event_type == "token":
+                        token = data.get("content", "")
+                        if token:
+                            if not had_tool_calls:
+                                status_placeholder.markdown("_Answering from existing knowledge..._")
+                            st.session_state.report_content += token
+                            token_buffer += token
+                            if len(token_buffer) >= RENDER_EVERY:
+                                report_placeholder.markdown(fix_latex(st.session_state.report_content))
+                                token_buffer = ""
+
+                    elif event_type == "done":
+                        if token_buffer:
                             report_placeholder.markdown(fix_latex(st.session_state.report_content))
-                            token_buffer = ""
+                        status_placeholder.empty()
+                        render_activity()
 
-                elif event_type == "done":
-                    if token_buffer:
-                        report_placeholder.markdown(fix_latex(st.session_state.report_content))
-                    status_placeholder.empty()
-                    render_activity()
-
-        except Exception as e:
-            status_placeholder.markdown("_Error_")
-            st.error(f"Connection error: {e}")
+            except Exception as e:
+                status_placeholder.markdown("_Error_")
+                st.error(f"Connection error: {e}")
 
 elif st.session_state.report_content:
     col_activity, col_report = st.columns([2, 3], gap="large")
