@@ -200,7 +200,9 @@ if st.session_state.report_content:
         )
 
     with col2:
-        obsidian_uri = f"obsidian://new?content={urllib.parse.quote(report_content)}"
+        title_match = re.search(r'^#\s+(.+)$', report_content, re.MULTILINE)
+        obs_name = urllib.parse.quote(title_match.group(1)) if title_match else "Research Report"
+        obsidian_uri = f"obsidian://new?name={obs_name}&content={urllib.parse.quote(report_content)}"
         st.link_button(
             "Open in Obsidian",
             obsidian_uri,
