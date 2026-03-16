@@ -5,7 +5,7 @@ Search the web and return a compressed summary of findings. You have at most 2 s
 </Task>
 
 <Available Tools>
-1. **tavily_search**: Web search. Returns up to 3 results per call. Use `fetch_full_content=True` to fetch the full page when snippets are insufficient.
+1. **tavily_search**: Web search. Returns up to 3 results per call. Use `fetch_full_content=True` **only** if a snippet is too short to extract a specific fact or number you need — not simply because the topic is complex. Maximum 1 full fetch total.
 </Available Tools>
 
 <Instructions>
