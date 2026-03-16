@@ -12,8 +12,7 @@ flowchart TD
 
     O -->|Trivial query| D([Direct Answer])
 
-    O -->|Research needed| B[Step 1: Save\nresearch_request.md]
-    B --> C{Query type?}
+    O -->|Research needed| C{Query type?}
 
     C -->|Single topic| R1[research-agent]
     C -->|Comparison| R2[research-agent A\n2–3 topics]
@@ -24,13 +23,10 @@ flowchart TD
     R3 --> T
 
     T -->|Gap remains| RX[research-agent\nfill gap]
-    RX --> S
-    T -->|Sufficient| S[Synthesize findings]
+    RX --> F
+    T -->|Sufficient| F[Write\nfinal_report.md]
 
-    S --> W[Read\nreport_guidelines.md]
-    W --> F[Write\nfinal_report.md]
-    F --> V[Verify vs\nresearch_request.md]
-    V --> OUT([Final Report])
+    F --> OUT([Final Report])
 ```
 
 ### Research Agent Loop

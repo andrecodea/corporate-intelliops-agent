@@ -43,8 +43,7 @@ render_mermaid("""
 flowchart LR
     U([User Query]) --> O[Orchestrator]
     O -->|Trivial| D([Direct Answer])
-    O -->|Research| B[Save request]
-    B --> C{Query type?}
+    O -->|Research| C{Query type?}
     C -->|Single topic| R1[research-agent]
     C -->|Comparison| R2[agent A]
     C -->|Comparison| R3[agent B]
@@ -52,11 +51,9 @@ flowchart LR
     R2 --> T
     R3 --> T
     T -->|Gap remains| RX[research-agent]
-    RX --> S[Synthesize]
-    T -->|Sufficient| S
-    S --> F[Write report]
-    F --> V[Verify]
-    V --> OUT([Final Report])
+    RX --> F[Write report]
+    T -->|Sufficient| F
+    F --> OUT([Final Report])
 """, height=280)
 
 st.divider()
