@@ -160,7 +160,6 @@ Benchmarked against an equivalent single-agent implementation using [agno](https
 - [x] Reorganize project into `backend/` and `frontend/` structure
 - [x] Expose the agent as a REST API via FastAPI
 - [x] SSE streaming endpoint (`POST /research/stream`) with typed events (`tool_call`, `tool_result`, `message`, `done`)
-- [ ] Thread/session management for multi-turn conversations
 - [ ] Request validation and structured error responses
 
 ### Phase 3 — Frontend (Streamlit) ✅
