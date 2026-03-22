@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from pathlib import Path
 from backend.agent import build_agent, WORKSPACE_DIR
 import json
 import uuid
@@ -9,8 +10,24 @@ agent = build_agent()
 
 app = FastAPI(title="Corporate IntelliOps Agent API")
 
+MODES_DIR = Path(__file__).parent / "prompts" / "modes"
+
+MODE_FILES = {
+    "Due Diligence": MODES_DIR / "due_diligence.md",
+    "Competitor Intel": MODES_DIR / "competitor_intel.md",
+    "Vendor Evaluation": MODES_DIR / "vendor_evaluation.md",
+    "Sales Intel": MODES_DIR / "sales_intel.md",
+}
+
+def _load_mode_prompt(mode: str | None) -> str:
+    if not mode or mode not in MODE_FILES:
+        return ""
+    path = MODE_FILES[mode]
+    return path.read_text(encoding="utf-8") if path.exists() else ""
+
 class ResearchRequest(BaseModel):
     query: str
+    mode: str | None = None
 
 def _extract_text(content) -> str:
     """Extract plain text from an AIMessageChunk content (str or list of blocks)."""
@@ -35,8 +52,11 @@ async def research_stream(request: ResearchRequest):
         try:
             pending_tool_calls: dict[int, dict] = {}  # index → {id, name, args}
 
+            mode_prompt = _load_mode_prompt(request.mode)
+            full_query = f"{mode_prompt}\n\n---\n\n{request.query}" if mode_prompt else request.query
+
             async for chunk, _ in agent.astream(
-                {"messages": [{"role": "user", "content": request.query}]},
+                {"messages": [{"role": "user", "content": full_query}]},
                 config={"configurable": {"thread_id": str(uuid.uuid4())}},
                 stream_mode="messages",
             ):

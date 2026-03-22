@@ -43,10 +43,10 @@ def format_activity_item(tool: str, inp: dict, done: bool = False) -> str:
         return f"**Read**{suffix} \u2014 `{detail}`"
     return f"**{tool}**{suffix}"
 
-def stream_events(query: str):
+def stream_events(query: str, mode: str):
     try:
         with httpx.Client(timeout=180) as client:
-            with connect_sse(client, "POST", API_URL, json={"query": query}) as source:
+            with connect_sse(client, "POST", API_URL, json={"query": query, "mode": mode}) as source:
                 for event in source.iter_sse():
                     try:
                         data = json.loads(event.data) if event.data and event.data != "{}" else {}
@@ -307,7 +307,7 @@ if search_btn and query:
                 activity_placeholder.markdown("\n\n".join(lines) if lines else "")
 
             try:
-                for event_type, data in stream_events(query):
+                for event_type, data in stream_events(query, mode):
                     if event_type == "error":
                         status_placeholder.markdown("_Error_")
                         st.error(f"Agent error: {data.get('message', 'Unknown error')}")
