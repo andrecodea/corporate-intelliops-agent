@@ -105,18 +105,40 @@ MODES = {
     "Due Diligence": {
         "icon": ":material/policy:",
         "caption": "Risk assessment for M&A, investment, or partnerships",
+        "description": (
+            "Investigates a target company for risk signals before a deal. "
+            "Covers financial health indicators, legal and regulatory flags, leadership background, "
+            "reputation, and red flags relevant to the deal type. "
+            "Output: risk-level assessment with supporting evidence."
+        ),
     },
     "Competitor Intel": {
         "icon": ":material/radar:",
         "caption": "Competitive landscape, positioning, and recent moves",
+        "description": (
+            "Maps a competitor's product, pricing, go-to-market motion, and recent strategic moves "
+            "relative to your company. Identifies exploitable weaknesses and positioning gaps. "
+            "Output: actionable competitive brief with differentiation angles."
+        ),
     },
     "Vendor Evaluation": {
         "icon": ":material/compare_arrows:",
         "caption": "Tool/vendor comparison before a procurement decision",
+        "description": (
+            "Compares vendors in a given tool category against your stack and criteria. "
+            "Covers capabilities, integration complexity, pricing model, and real-world adoption signals. "
+            "Output: comparison table with trade-off analysis."
+        ),
     },
     "Sales Intel": {
         "icon": ":material/handshake:",
         "caption": "Account research before a prospect meeting",
+        "description": (
+            "Profiles a target account before a sales meeting. "
+            "Surfaces tech stack signals, likely pain points, recent news and buying triggers, "
+            "and key decision-maker context. "
+            "Output: account brief with specific conversation hooks."
+        ),
     },
 }
 
@@ -143,6 +165,8 @@ def build_query(mode: str, fields: dict) -> str:
             f"Competitive intelligence: analyze {fields['competitor']} as a competitor to {fields['our_company']} in the {fields['sector']} market.",
             f"Dimensions to cover: {fields['dimensions']}.",
         ]
+        if fields.get("our_company_url"):
+            lines.append(_url_hint(fields["our_company_url"], label="company conducting this research"))
         if fields.get("competitor_url"):
             lines.append(_url_hint(fields["competitor_url"], label="competitor"))
         if fields.get("focus"):
@@ -196,6 +220,7 @@ mode = st.radio(
 )
 
 st.caption(MODES[mode]["caption"])
+st.markdown(MODES[mode]["description"])
 st.divider()
 
 fields: dict = {}
@@ -225,11 +250,20 @@ elif mode == "Competitor Intel":
             placeholder="e.g. pricing, product, go-to-market",
             value="product, pricing, go-to-market, recent moves",
         )
-    col_url, col_focus = st.columns(2)
-    with col_url:
-        fields["competitor_url"] = st.text_input("Competitor website (optional)", placeholder="e.g. https://fabrikam.com", help="Anchors the research to the correct entity and prevents ambiguity.")
-    with col_focus:
-        fields["focus"] = st.text_input("Additional focus (optional)", placeholder="e.g. enterprise segment only")
+    col_our_url, col_comp_url = st.columns(2)
+    with col_our_url:
+        fields["our_company_url"] = st.text_input(
+            "Your company website (Recommended)",
+            placeholder="e.g. https://contoso.com",
+            help="Recommended — helps the agent identify your company correctly before comparing.",
+        )
+    with col_comp_url:
+        fields["competitor_url"] = st.text_input(
+            "Competitor website (optional)",
+            placeholder="e.g. https://fabrikam.com",
+            help="Anchors the research to the correct entity and prevents ambiguity.",
+        )
+    fields["focus"] = st.text_input("Additional focus (optional)", placeholder="e.g. enterprise segment only")
 
 elif mode == "Vendor Evaluation":
     col1, col2 = st.columns(2)
@@ -257,7 +291,7 @@ elif mode == "Sales Intel":
         fields["focus"] = st.text_input("Additional focus (optional)", placeholder="e.g. focus on the CFO's priorities")
     fields["target_url"] = st.text_input("Company website (optional)", placeholder="e.g. https://northwind.com", help="Anchors the research to the correct entity and prevents ambiguity.")
 
-OPTIONAL_FIELDS = {"focus", "company_url", "competitor_url", "target_url"}
+OPTIONAL_FIELDS = {"focus", "company_url", "our_company_url", "competitor_url", "target_url"}
 required_filled = all(v for k, v in fields.items() if k not in OPTIONAL_FIELDS)
 query = build_query(mode, fields) if required_filled else ""
 

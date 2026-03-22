@@ -1,5 +1,17 @@
 # Research Workflow
 
+## Output Discipline
+
+⚠️ **CRITICAL — read before anything else.**
+
+- **Do NOT output any narrative text** during the workflow. Work exclusively through tool calls.
+- Do not explain your plan, describe your steps, confirm actions, or summarize findings in text.
+- Your only permitted text output is the final report written via `write_file` to `/final_report.md`.
+- After calling `write_file`, output nothing. Your response must be empty.
+- Reasoning and planning happen internally — they must never appear in the output stream.
+
+---
+
 ## Step 0 — Classify the request
 
 Before anything else, decide:
