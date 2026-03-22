@@ -129,6 +129,141 @@ PYTHONUTF8=1 uv run langgraph dev --no-reload --allow-blocking
 uv run uvicorn backend.api:app --reload
 ```
 
+## Design Patterns
+
+Each architectural decision was made to solve a specific problem — this section documents the reasoning, not just the pattern.
+
+### Factory — `backend/tools.py::create_tavily_search(max_calls)`
+
+Each sub-agent gets its own `tavily_search` instance created by a factory function. The call counter lives inside a closure, making the limit per-instance and independent of other agents.
+
+```python
+def create_tavily_search(max_calls: int = 3):
+    call_count = [0]
+    @tool
+    def tavily_search(...):
+        if call_count[0] >= max_calls:
+            return "HARD LIMIT REACHED..."
+        call_count[0] += 1
+        ...
+    return tavily_search
+```
+
+**Why not a shared counter or prompt-only limit?** A shared counter would make agents compete for the budget. A prompt-only limit depends on the model obeying — the closure is deterministic: the model physically cannot exceed it regardless of what it decides.
+
+---
+
+### Strategy — `backend/agent.py::_init_llm()`
+
+LLM selection uses a two-strategy chain: Anthropic (primary) → OpenAI (fallback), driven entirely by which API keys are present in the environment.
+
+**Why:** avoids a hard dependency on a single provider. If `ANTHROPIC_API_KEY` is absent, the agent still runs. Adding a third provider is a new `elif` branch with no changes to the rest of the code.
+
+---
+
+### Middleware — `backend/agent.py` (`ToolRetryMiddleware`)
+
+`ToolRetryMiddleware` is applied only to the orchestrator — not sub-agents. It catches `TimeoutError`, `ConnectionError`, and `UsageLimitExceededError`, retrying up to 3× with 2× exponential backoff.
+
+**`SummarizationMiddleware` was removed.** It compressed context automatically, but the compression happened before the sub-agent finished its task — causing it to lose track of what it had already searched. The agent would re-search the same topics in a loop, burning tokens without making progress. Removing it and using explicit compressed summaries (returned by the research agent in a fixed format) solved the problem.
+
+---
+
+### Observer / Callback — `tests/run_agent.py::UsageTracker`
+
+Extends LangChain's `BaseCallbackHandler` and hooks into `on_llm_end` to capture token usage and timing per call. Zero changes to production code.
+
+**Why:** keeps the test harness non-intrusive. Adding new metrics means extending this class — nothing in the agent needs to know it's being observed.
+
+---
+
+### Builder — `backend/agent.py::build_agent()`
+
+The agent graph is built in a fixed ordered sequence: env parsing → Pydantic validation → LLM init → tool instantiation → sub-agent construction → prompt assembly → graph creation → config injection.
+
+**Why a fixed order matters:** each step depends on the previous one. Pydantic validation fails fast on bad env vars before any API call is made. Tools are instantiated before sub-agents so each agent gets a fresh factory instance. The order encodes the dependency graph explicitly.
+
+---
+
+### Per-request Prompt Injection — `backend/api.py::_load_mode_prompt()`
+
+Mode-specific instructions are loaded from `backend/prompts/modes/` at request time and prepended to the user message — not baked into the system prompt at startup.
+
+```
+[mode prompt: research priorities + report structure]
+
+---
+
+[assembled query from build_query()]
+```
+
+**Why at request time:** `build_agent()` runs once at server startup. If mode instructions lived in the system prompt, the agent would carry all four modes' instructions in every request — including for modes not in use. Loading per request keeps context lean and instructions focused. It also means adding a new mode requires only a new `.md` file and one line in `MODE_FILES` — no agent rebuild.
+
+---
+
+### Adapter — `backend/api.py::event_stream()`
+
+Translates LangGraph's internal message types (`AIMessageChunk`, `ToolMessage`) into typed SSE events (`token`, `tool_call`, `tool_result`, `error`, `done`) for the frontend.
+
+**Why a single translation point:** the frontend and the agent are decoupled. If LangGraph changes its message format, only this function changes. The frontend only knows about SSE event types.
+
+---
+
+### Facade — `frontend/app/pages/research.py::stream_events()`
+
+Wraps `httpx_sse.connect_sse` into a generator yielding `(event_type, data_dict)` tuples. All SSE connection logic, JSON parsing, and error handling is contained here.
+
+**Why:** the streaming loop in the UI only has to handle business logic — what to render for each event type. Connection concerns are invisible to it.
+
+---
+
+### Dependency Injection — `backend/tools.py` (`InjectedToolArg`)
+
+`max_results=3` is marked with `Annotated[int, InjectedToolArg]`, hiding it from the LLM's tool schema. The value is injected at runtime by the framework.
+
+**Why:** the LLM sees a cleaner tool interface with fewer parameters to reason about. It also prevents the model from requesting more results than the system is designed to handle.
+
+---
+
+## Optimizations
+
+### Implemented
+
+**Sub-agent result compression**
+Sub-agents return bullet-point summaries (max 300 words) instead of raw search results. This significantly reduces the context passed back to the orchestrator, which is the largest driver of token usage in multi-agent runs.
+
+**Direct search bypass for single-topic queries**
+If the orchestrator classifies a request as single-topic, it searches directly with `tavily_search` without spawning a sub-agent. This eliminates the delegation overhead (~2 extra LLM calls) for the most common query type.
+
+| Path | LLM calls | Total tokens |
+|---|---|---|
+| Single-topic (bypass) | ~2 | ~18k |
+| Comparison (full multi-agent) | ~10 | ~90k |
+
+**`think_tool` skip for single-topic queries**
+Assessment via `think_tool` is skipped entirely for single-topic queries. It is only used after sub-agent results come back in comparative runs, where assessing gaps is actually useful.
+
+**Hard cap via closure counter**
+`tavily_search` enforces a call limit at the code level. When reached, the tool returns a blocking message that instructs the model to stop searching and write its summary immediately. This prevents runaway search loops regardless of model behavior.
+
+**Sources exempt from compression limit**
+The 300-word cap on sub-agent summaries applies only to the Key Findings section. The Sources list has no word limit — every URL found across all searches is returned. This ensures the orchestrator always has full citation coverage for the final report.
+
+**Mode-specific prompts loaded per request**
+Each intelligence mode loads only its own prompt file at request time. The system prompt stays fixed and small. A generic research query adds ~0 tokens of mode overhead; a structured intelligence operation adds only the active mode's instructions (~200–300 tokens), not all four modes at once.
+
+---
+
+### Planned (Phase 5)
+
+**Search cap calibration per mode**
+The current 3-search hard cap was set for general queries. Comparative modes (Competitor Intel, Vendor Evaluation) cover more dimensions and may need a higher cap to deliver all required deliverables without gaps. The plan is to test each mode, identify where findings are thin, and adjust the cap accordingly — then re-test and compare token usage against the baseline.
+
+**Route report-writing to a cheaper model**
+The final report-writing step is the most token-intensive call, but it requires less reasoning than the research and planning steps. Routing it to a smaller model (e.g. `claude-haiku-4-5`) instead of Sonnet could reduce cost significantly without impacting output quality for well-structured reports.
+
+---
+
 ## Example Output
 
 See [`examples/final_report.md`](examples/final_report.md) for a sample report generated by the agent.
