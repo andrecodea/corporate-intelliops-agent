@@ -1,6 +1,12 @@
 # Corporate IntelliOps Agent
 
-A multi-agent corporate intelligence platform built with [deepagents](https://github.com/langchain-ai/deepagents) and LangGraph. Choose an intelligence mode — Due Diligence, Competitor Intel, Vendor Evaluation, or Sales Intel — and the agent autonomously searches the web, synthesizes findings, and delivers a structured report with cited sources.
+A structured B2B intelligence platform built with [deepagents](https://github.com/langchain-ai/deepagents) and LangGraph. The user selects an intelligence mode and fills in structured context — the agent searches the web, synthesizes findings with mode-specific priorities, and delivers a cited report as PDF.
+
+**Four intelligence modes:**
+- **Due Diligence** — risk assessment for M&A, investment, or partnerships
+- **Competitor Intel** — competitive landscape, positioning, and recent moves
+- **Vendor Evaluation** — tool/vendor comparison before a procurement decision
+- **Sales Intel** — account research before a prospect meeting
 
 ![Corporate IntelliOps Agent UI](assets/research.png)
 
@@ -69,6 +75,7 @@ flowchart LR
 | Checkpointing | `InMemorySaver` (default) / PostgreSQL |
 | API layer | FastAPI + SSE streaming |
 | Frontend | Streamlit |
+| PDF export | `xhtml2pdf` (Markdown → HTML → PDF) |
 
 ## Setup
 
@@ -91,6 +98,8 @@ TAVILY_API_KEY=...      # web search
 Optional:
 
 ```env
+SLACK_BOT_TOKEN=xoxb-...      # Slack bot token for PDF upload (scope: files:write)
+SLACK_CHANNEL_ID=C0XXXXXXX    # target Slack channel
 LANGSMITH_API_KEY=...         # observability
 LANGGRAPH_DATABASE_URL=...    # persistent checkpoints (PostgreSQL)
 MODEL_NAME=claude-sonnet-4-6
@@ -154,25 +163,31 @@ Benchmarked against an equivalent single-agent implementation using [agno](https
 - [x] Hard cap on `tavily_search` calls via closure counter (enforced at code level, not just prompt)
 - [x] Sub-agent search limit raised to 3; sources section exempt from 300-word compression limit
 - [x] Skip `think_tool` assessment for single-topic queries (saves 1 call — ~2 calls / ~18k tokens total)
-- [ ] Route report-writing calls to a cheaper model (e.g. Haiku) instead of Sonnet
 
 ### Phase 2 — API Layer (FastAPI) ✅
 - [x] Reorganize project into `backend/` and `frontend/` structure
 - [x] Expose the agent as a REST API via FastAPI
 - [x] SSE streaming endpoint (`POST /research/stream`) with typed events (`tool_call`, `tool_result`, `message`, `done`)
-- [ ] Request validation and structured error responses
+- [x] Mode-aware request payload — API loads and injects the active mode prompt per request
 
 ### Phase 3 — Frontend (Streamlit) ✅
-- [x] Multi-page app: Home, Research, Info
+- [x] Multi-page app: Home, Intelligence Operations, Info
 - [x] Real-time agent activity panel with dynamic status labels
 - [x] Token streaming with batch rendering
 - [x] Report rendering with Markdown + LaTeX support
-- [x] Export: download `.md`, open in Obsidian, send to Slack
+- [x] Export: PDF download, open in Obsidian, send PDF to Slack via Bot API
 - [x] Info page with architecture diagrams, stack table, and benchmarks
 - [x] Session state persistence across page navigation
 
-### Phase 4 — Ambient Agent (Scheduled Research) 🔜
-- [ ] Weekly cron job that runs the agent automatically
-- [ ] Configurable query (e.g. "latest papers on X published this week")
-- [ ] Sends the report as Markdown to Slack via webhook
-- [ ] Configurable schedule and topic via environment variables
+### Phase 4 — B2B Intelligence Positioning ✅
+- [x] Rebrand to Corporate IntelliOps Agent
+- [x] Replace free-text query with structured input per intelligence mode
+- [x] `build_query()` assembles targeted prompts from structured fields
+- [x] Optional company URL field to anchor entity resolution and prevent hallucination
+- [x] Mode-specific prompt files (`backend/prompts/modes/`) injected at request time — keeps system prompt lean, loads only the active mode's research priorities and report structure
+
+### Phase 5 — Calibration 🔜
+- [ ] Prompt adjustments — validate mode prompts produce correct deliverables per mode
+- [ ] Test — run each mode with `tests/run_agent.py`, evaluate report quality and search coverage
+- [ ] Cap adjustments — revisit the 3-search hard cap per sub-agent; comparative modes (Competitor Intel, Vendor Evaluation) may require more searches to cover all deliverables
+- [ ] Test — re-run after cap change, compare token usage and output quality against Phase 4 baseline
