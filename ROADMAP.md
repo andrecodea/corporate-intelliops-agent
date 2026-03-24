@@ -6,8 +6,9 @@ Each sprint is scoped to one week.
 
 ## Sprint 1 — Calibration
 
+- [ ] Replace `httpx` full-page fetch with Firecrawl — handles Cloudflare, JS-rendered pages, and blocked sites; falls back to Tavily snippet on failure
 - [ ] Validate each mode prompt produces the correct deliverables
-- [ ] Run all 4 modes with `tests/run_agent.py` and evaluate report quality and search coverage
+- [ ] Run all 4 modes with `tests/run_mode_{mode}.py` and evaluate report quality and search coverage
 - [ ] Adjust search cap per mode if comparative modes (Competitor Intel, Vendor Evaluation) show thin findings
 - [ ] Re-run after adjustments and compare token usage and output quality against baseline
 
