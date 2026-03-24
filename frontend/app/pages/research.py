@@ -12,7 +12,7 @@ from httpx_sse import connect_sse, SSEError
 
 API_URL = os.getenv("RESEARCH_API_URL", "http://localhost:8005/research/stream")
 
-st.title("Intelligence")
+st.title("Intelligence Operations")
 st.caption("Choose a mode, fill in the context, and the agent will research, synthesize, and deliver a structured report.")
 
 # --------------------

@@ -16,13 +16,13 @@ load_dotenv(find_dotenv())
 def main():
     st.set_page_config(
         page_title="Corporate Intelligence Operations",
-        page_icon=":material/network_intelligence:",
+        page_icon=":material/neurology:",
         layout="wide",
     )
 
     pages = [
         st.Page("pages/home.py", title="Home", icon=":material/home:"),
-        st.Page("pages/research.py", title="Intelligence Operations", icon=":material/network_intelligence:"),
+        st.Page("pages/research.py", title="IntelliOps", icon=":material/neurology:"),
         st.Page("pages/info.py", title="Info", icon=":material/info:"),
     ]
 

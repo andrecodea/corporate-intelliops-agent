@@ -361,6 +361,49 @@ wheels = [
 ]
 
 [[package]]
+name = "corporate-intelliops-agent"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "deepagents" },
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "httpx-sse" },
+    { name = "langchain-anthropic" },
+    { name = "langchain-openai" },
+    { name = "langgraph-cli", extra = ["inmem"] },
+    { name = "langsmith" },
+    { name = "markdown" },
+    { name = "markdownify" },
+    { name = "pydantic" },
+    { name = "python-dotenv" },
+    { name = "streamlit" },
+    { name = "tavily" },
+    { name = "uvicorn" },
+    { name = "xhtml2pdf" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "deepagents", specifier = ">=0.4.10" },
+    { name = "fastapi", specifier = ">=0.135.1" },
+    { name = "httpx", specifier = ">=0.28.0" },
+    { name = "httpx-sse", specifier = ">=0.4.3" },
+    { name = "langchain-anthropic", specifier = ">=0.3.0" },
+    { name = "langchain-openai", specifier = ">=1.1.11" },
+    { name = "langgraph-cli", extras = ["inmem"], specifier = ">=0.1.0" },
+    { name = "langsmith", specifier = ">=0.7.16" },
+    { name = "markdown", specifier = ">=3.10.2" },
+    { name = "markdownify", specifier = ">=1.2.2" },
+    { name = "pydantic", specifier = ">=2.12.5" },
+    { name = "python-dotenv", specifier = ">=1.2.2" },
+    { name = "streamlit", specifier = ">=1.55.0" },
+    { name = "tavily", specifier = ">=1.1.0" },
+    { name = "uvicorn", specifier = ">=0.41.0" },
+    { name = "xhtml2pdf", specifier = ">=0.2.16" },
+]
+
+[[package]]
 name = "croniter"
 version = "6.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -436,49 +479,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/e0/20/92eaa6b0aec7189fa4b75c890640e076e9e793095721db69c5c81142c2e1/cssselect2-0.9.0.tar.gz", hash = "sha256:759aa22c216326356f65e62e791d66160a0f9c91d1424e8d8adc5e74dddfc6fb", size = 35595, upload-time = "2026-02-12T17:16:39.614Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/21/0e/8459ca4413e1a21a06c97d134bfaf18adfd27cea068813dc0faae06cbf00/cssselect2-0.9.0-py3-none-any.whl", hash = "sha256:6a99e5f91f9a016a304dd929b0966ca464bcfda15177b6fb4a118fc0fb5d9563", size = 15453, upload-time = "2026-02-12T17:16:38.317Z" },
-]
-
-[[package]]
-name = "deep-agent-v1"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "deepagents" },
-    { name = "fastapi" },
-    { name = "httpx" },
-    { name = "httpx-sse" },
-    { name = "langchain-anthropic" },
-    { name = "langchain-openai" },
-    { name = "langgraph-cli", extra = ["inmem"] },
-    { name = "langsmith" },
-    { name = "markdown" },
-    { name = "markdownify" },
-    { name = "pydantic" },
-    { name = "python-dotenv" },
-    { name = "streamlit" },
-    { name = "tavily" },
-    { name = "uvicorn" },
-    { name = "xhtml2pdf" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "deepagents", specifier = ">=0.4.10" },
-    { name = "fastapi", specifier = ">=0.135.1" },
-    { name = "httpx", specifier = ">=0.28.0" },
-    { name = "httpx-sse", specifier = ">=0.4.3" },
-    { name = "langchain-anthropic", specifier = ">=0.3.0" },
-    { name = "langchain-openai", specifier = ">=1.1.11" },
-    { name = "langgraph-cli", extras = ["inmem"], specifier = ">=0.1.0" },
-    { name = "langsmith", specifier = ">=0.7.16" },
-    { name = "markdown", specifier = ">=3.10.2" },
-    { name = "markdownify", specifier = ">=1.2.2" },
-    { name = "pydantic", specifier = ">=2.12.5" },
-    { name = "python-dotenv", specifier = ">=1.2.2" },
-    { name = "streamlit", specifier = ">=1.55.0" },
-    { name = "tavily", specifier = ">=1.1.0" },
-    { name = "uvicorn", specifier = ">=0.41.0" },
-    { name = "xhtml2pdf", specifier = ">=0.2.16" },
 ]
 
 [[package]]
